@@ -32,7 +32,15 @@ typedef struct {
     int m_nRadiotapFlags;
 } __attribute__((packed)) PENUMBRA_RADIOTAP_DATA;
 
+typedef struct {
+    int8_t ant;
+    int8_t dbm;
+} radiotap_data_t;
 
+static void radiotap_data_init(radiotap_data_t *radiotap_data) {
+    radiotap_data->ant = 99;
+    radiotap_data->dbm = 0;
+}
 
 static const struct radiotap_align_size align_size_000000_00[] = {
     [0] = {
@@ -302,7 +310,16 @@ uint8_t process_packet(monitor_interface_t *interface, int adapter_no) {
         exit(1);
     }
 
+    static radiotap_data_t radiotap_data_base = {};
+    radiotap_data_init(&radiotap_data_base);
 
+    int radiotap_data_count = 4;
+    radiotap_data_t radiotap_data[radiotap_data_count];
+    int radiotap_data_i = 0;
+    for (radiotap_data_i = 0; radiotap_data_i < radiotap_data_count; radiotap_data_i++) {
+        radiotap_data_init(&radiotap_data[radiotap_data_i]);
+    }
+    radiotap_data_i = 0;
 
     while ((n = ieee80211_radiotap_iterator_next(&rti)) == 0) {
 
@@ -315,6 +332,13 @@ uint8_t process_packet(monitor_interface_t *interface, int adapter_no) {
             case IEEE80211_RADIOTAP_ANTENNA: {
                 ant[adapter_no] = (int8_t)(*rti.this_arg);
                 //fprintf(stderr, "Ant: %d   ", ant[adapter_no]);
+                if (radiotap_data[radiotap_data_i].ant != radiotap_data_base.ant) {
+                    if (radiotap_data_i < radiotap_data_count - 1) {
+                        radiotap_data_i++;
+                        radiotap_data_init(&radiotap_data[radiotap_data_i]);
+                    }
+                }
+                radiotap_data[radiotap_data_i].ant = (int8_t)(*rti.this_arg);
                 break;
             }
             case IEEE80211_RADIOTAP_DB_ANTSIGNAL: {
@@ -338,6 +362,15 @@ uint8_t process_packet(monitor_interface_t *interface, int adapter_no) {
                 break;
             }
             case IEEE80211_RADIOTAP_DBM_ANTSIGNAL: {
+                //fprintf(stderr, "DBM: %d   ", (int8_t)(*rti.this_arg));
+                if (radiotap_data[radiotap_data_i].dbm != radiotap_data_base.dbm) {
+                    if (radiotap_data_i < radiotap_data_count - 1) {
+                        radiotap_data_i++;
+                        radiotap_data_init(&radiotap_data[radiotap_data_i]);
+                    }
+                }
+                radiotap_data[radiotap_data_i].dbm = (int8_t)(*rti.this_arg);
+                /*
                 // crude hack because this needs to be fixed before we replace everything in 2.1
                 int _ant = 0;
 
@@ -386,7 +419,7 @@ uint8_t process_packet(monitor_interface_t *interface, int adapter_no) {
                             ant[adapter_no] = 99;
                         }
                     }
-                }
+                }*/
 
                 //fprintf(stderr, "/n");
 
@@ -398,6 +431,39 @@ uint8_t process_packet(monitor_interface_t *interface, int adapter_no) {
         }
     }
 
+    for (radiotap_data_i = 0; radiotap_data_i < radiotap_data_count; radiotap_data_i++)
+    {
+        if (radiotap_data[radiotap_data_i].dbm == radiotap_data_base.dbm)
+            continue;
+
+        //fprintf(stderr, "i: %d | ant: %d | dbm: %d \n", radiotap_data_i, radiotap_data[radiotap_data_i].ant, radiotap_data[radiotap_data_i].dbm);
+
+        if (radiotap_data[radiotap_data_i].dbm < 0) {
+            dbm_last[adapter_no] = dbm[adapter_no];
+            dbm[adapter_no] = radiotap_data[radiotap_data_i].dbm;
+            
+            if (dbm[adapter_no] > dbm_last[adapter_no]) {
+                dbm_last[adapter_no] = dbm[adapter_no];
+
+                //fprintf(stderr, "New DBM: %d   ", dbm_last[adapter_no]);
+
+                dbm_ts_now[adapter_no] = current_timestamp();
+
+                //fprintf(stderr, "Time: %d   ", dbm_ts_now[adapter_no]);
+
+                if (dbm_ts_now[adapter_no] - dbm_ts_prev[adapter_no] > 1000) {
+                    dbm_ts_prev[adapter_no] = current_timestamp();
+
+                    rx_status->adapter[adapter_no].current_signal_dbm = dbm[adapter_no];
+
+                    //fprintf(stderr, "Best DBM: %d   ", dbm_last[adapter_no]);
+
+                    dbm_last[adapter_no] = -126;
+                    ant[adapter_no] = 99;
+                }
+            }
+        }
+    }
 
     pu8Payload += u16HeaderLen + interface->n80211HeaderLength;
     
